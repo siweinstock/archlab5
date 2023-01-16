@@ -33,9 +33,9 @@ module top;
 	   @(posedge clk);
 
 	   // read mem[i]
-	   /***********************************
-            * TODO: fill here
-            **********************************/
+	   sram_WE <= 0;
+
+	   
 	   @(posedge clk)
 
 	   // verify mem[i]

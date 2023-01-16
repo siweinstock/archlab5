@@ -61,11 +61,12 @@ module CTL(
 	verilog_trace_fp = $fopen("verilog_trace.txt", "w");
      end
 
-   /***********************************
-    * set up sram inputs (outputs from sp)
-    * 
-    * TODO: fill here
-    **********************************/
+    // sram inputs (outputs from sp)
+	reg [31:0] sram_DI;
+	reg [15:0] sram_ADDR;
+	reg sram_EN;
+	reg sram_WE;
+
 
    // synchronous instructions
    always@(posedge clk)
@@ -120,15 +121,151 @@ module CTL(
                 if (start)
                   ctl_state <= `CTL_STATE_FETCH0;
              end
-             /***********************************
-              * TODO: fill here
-              **********************************/
+	     `CTL_STATE_FETCH0: begin
+				ctl_state <= `CTL_STATE_FETCH1;
+             end
+	     `CTL_STATE_FETCH1: begin
+                inst <= sram_DO;
+
+				ctl_state <= `CTL_STATE_DEC0;
+             end
+	     `CTL_STATE_DEC0: begin
+                {opcode, dst, src0, src1, immediate[15:0]} <= inst[29:0];
+				immediate[31:16] <= {16{inst[15]}};		// sign extend immediate
+
+				ctl_state <= `CTL_STATE_DEC1;
+             end
+	     `CTL_STATE_DEC1: begin
+			// TODO: what about LHI command?
+                case (src0)
+					0: alu0 <= 0;
+					1: alu0 <= immediate;
+					2: alu0 <= r2;
+					3: alu0 <= r3;
+					4: alu0 <= r4;
+					5: alu0 <= r5;
+					6: alu0 <= r6;
+					7: alu0 <= r7;
+					default: alu0 <= 'bx;	// shouldn't get here
+		 		endcase
+
+                case (src1)
+					0: alu1 <= 0;
+					1: alu1 <= immediate;
+					2: alu1 <= r2;
+					3: alu1 <= r3;
+					4: alu1 <= r4;
+					5: alu1 <= r5;
+					6: alu1 <= r6;
+					7: alu1 <= r7;
+					default: alu1 <= 'bx;	// shouldn't get here
+		 		endcase
+
+				ctl_state <= `CTL_STATE_EXEC0;
+             end
+	     `CTL_STATE_EXEC0: begin
+				case (opcode)
+					`LD,
+					`ST,
+					`HLT: aluout <= aluout;			// nothing
+					default: aluout <= aluout_wire;	// assign value calculated by ALU
+				endcase
+
+				ctl_state <= `CTL_STATE_EXEC1;
+             end
+	     `CTL_STATE_EXEC1: begin
+				pc <= pc + 1;
+
+                case (opcode)
+					`ADD,
+					`SUB,
+					`LSF,
+					`RSF,
+					`AND,
+					`OR,
+					`XOR,
+					`LHI:
+						case (dst)
+							2: r2 <= aluout_wire;
+							3: r3 <= aluout_wire;
+							4: r4 <= aluout_wire;
+							5: r5 <= aluout_wire;
+							6: r6 <= aluout_wire;
+							7: r7 <= aluout_wire;
+							default: {r2, r3, r4, r5, r6, r7} <= 'bx;		// shouldn't get here
+						endcase
+					`JLT,
+					`JLE,
+					`JEQ,
+					`JNE,
+					`JIN:
+						if (aluout) begin
+							r7 <= pc;
+							pc <= immediate;
+						end
+					`LD:
+						case (dst)
+							2: r2 <= sram_DO;
+							3: r3 <= sram_DO;
+							4: r4 <= sram_DO;
+							5: r5 <= sram_DO;
+							6: r6 <= sram_DO;
+							7: r7 <= sram_DO;
+							default: {r2, r3, r4, r5, r6, r7} <= 'bx;		// shouldn't get here
+						endcase
+					`HLT: begin
+						ctl_state <= `CTL_STATE_IDLE;
+						$fclose(verilog_trace_fp);
+						$writememh("verilog_sram_out.txt", top.SP.SRAM.mem);
+						$finish;
+					end
+
+				endcase
+
+				ctl_state <= `CTL_STATE_FETCH0;
+				
+             end
+
+			//  default: ctl_state <= `CTL_STATE_FETCH0;
 	   endcase
-	   if (opcode == `HLT) begin
-	      $fclose(verilog_trace_fp);
-	      $writememh("verilog_sram_out.txt", top.SP.SRAM.mem);
-	      $finish;
-	   end
+
+
 	end // !reset
      end // @posedge(clk)
+
+	// SRAM ctl
+	always @(ctl_state or sram_ADDR or sram_DI or sram_EN or sram_WE) begin
+		{sram_DI, sram_ADDR, sram_WE, sram_EN} = 0;
+
+		case (ctl_state) 
+			`CTL_STATE_FETCH0: begin
+				sram_DI = 0;
+				sram_ADDR = pc;
+				sram_WE = 0;
+				sram_EN = 1;
+			end
+			`CTL_STATE_EXEC0: begin
+				if (opcode == `LD) begin
+					sram_DI = 0;
+					sram_ADDR = alu1[15:0];
+					sram_WE = 0;
+					sram_EN = 1;
+				end
+			end
+			`CTL_STATE_EXEC1: begin
+				if (opcode == `ST) begin
+					sram_DI = alu0;
+					sram_ADDR = alu1[15:0];
+					sram_WE = 1;
+					sram_EN = 1;
+				end
+			end
+			default:	// F1, D0, D1, IDLE: SRAM disabled
+				{sram_DI, sram_ADDR, sram_WE, sram_EN} = 0;
+
+		endcase
+
+	end
+
+
 endmodule // CTL
